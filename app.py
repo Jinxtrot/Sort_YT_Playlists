@@ -3,8 +3,6 @@ from flask import Flask, jsonify,request
 from datetime import date
 import googleapiclient.discovery
 import google_auth_oauthlib.flow
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
 
 app = Flask(__name__)
 
@@ -34,14 +32,39 @@ def get_playlists(youtube_service):
         mine=True
     ).execute()
     return response["items"]
+    
+
+def sort_videos_length(videos):
+    for video in videos:
+        duration_str = video["duration"].replace('PT', '')
+    
+        has_hours = 'H' in duration_str
+        has_minutes = 'M' in duration_str
+        has_seconds = 'S' in duration_str
+
+        hours, minutes, seconds = 0, 0, 0
+
+        if has_hours:
+            temp=duration_str.split('H')
+            duration_str=temp[1]
+            hours=int(temp[0])
+        if has_minutes:
+            temp=duration_str.split('M')
+            duration_str=temp[1]
+            minutes=int(temp[0])
+        if has_seconds:
+            temp=duration_str.split('S')
+            seconds=int(temp[0])
+
+        total_seconds = hours * 3600 + minutes * 60 + seconds
+        video["duration"] = total_seconds
+
+    return sorted(videos, key=lambda video: video["duration"])
 
 @app.route('/api/playlist', methods=['GET'])
 def api_get_playlists():
-    # Disable OAuthlib's HTTPS verification when running locally.
-    # *DO NOT* leave this option enabled in production.
     os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
 
-    # Get credentials and create an API client
     credentials = get_credentials_read()
 
     youtube = googleapiclient.discovery.build(
@@ -59,6 +82,7 @@ def api_get_playlists():
         playlists_data.append(playlist_data)
 
     return jsonify(playlists_data)
+
 
 @app.route('/api/playlist/<playlist_id>', methods=['GET'])
 def api_get_playlist(playlist_id):
@@ -100,16 +124,16 @@ def api_get_playlist(playlist_id):
         else:
             next_page_token = playlist_response.get("nextPageToken")
 
+    playlist_name=youtube.playlists().list(part="snippet",id=playlist_id).execute().get("items")[0].get("snippet").get("title")
+
+    videos_data={"id":playlist_id,"playlist_name":playlist_name,"videos":videos_data["videos"]}
+    videos_data["videos"] = sort_videos_length(videos_data["videos"])
+
     return jsonify(videos_data)
 
-@app.route('/api/playlist', methods=['POST'])
-def api_create_playlist():
-    data=request.json
-    title=data['title']
+def api_create_playlist(playlist_title=None):
+    title=playlist_title
     description=date.today().strftime("%B %d, %Y")
-
-    if not title:
-        return jsonify({"error": "Missing title"}), 400
     
     credentials = get_credentials_write()
 
@@ -130,6 +154,43 @@ def api_create_playlist():
         part="snippet,status",
         body=request_body
     ).execute()
+
+    return jsonify(response),youtube
+
+@app.route('/api/playlist/sort/<playlist_id>', methods=['POST'])
+def insert_videos_in_playlist(playlist_id):
+
+    videos=api_get_playlist(playlist_id)
+    response_videos=videos.get_json()
+
+    playlist_title=response_videos.get("playlist_name","")+" - Sorted"
+
+    response_creation,youtube=api_create_playlist(playlist_title)
+
+    response_creation=response_creation.get_json()
+    new_playlist_id=response_creation["id"]
+    
+    for video in response_videos["videos"]:
+        try:
+            request_body = {
+                "snippet": {
+                    "playlistId": new_playlist_id,
+                    "resourceId": {
+                        "kind": "youtube#video",
+                        "videoId": video["id"]
+                    }
+                }
+            }
+
+            response = youtube.playlistItems().insert(
+                part="snippet",
+                body=request_body
+            ).execute()
+    # Your API request here
+        except googleapiclient.errors.HttpError as e:
+            print(f"HTTP Error: {e.resp.status} - {e.content}")
+
+        
 
     return jsonify(response)
 
