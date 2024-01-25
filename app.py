@@ -190,8 +190,6 @@ def insert_videos_in_playlist(playlist_id):
         except googleapiclient.errors.HttpError as e:
             print(f"HTTP Error: {e.resp.status} - {e.content}")
 
-        
-
     return jsonify(response)
 
 @app.route('/api/playlist/<playlist_id>', methods=['DELETE'])
